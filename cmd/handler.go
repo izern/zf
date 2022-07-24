@@ -313,7 +313,7 @@ func (receiver *Handler) Append(path string, key string, index uint, value strin
 		parentMap[lastPath.NodeKey] = result
 
 	case types.Object:
-		lastPathMapV := lastPathV.(map[interface{}]interface{})
+		lastPathMapV := lastPathV.(map[string]interface{})
 
 		var vMap map[string]interface{}
 		switch v.(type) {

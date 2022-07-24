@@ -17,5 +17,3 @@ build/*
 
 .idea/
 *.iml
-
-go.sum
