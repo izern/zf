@@ -36,12 +36,14 @@ func (receiver Handler) GetCurrType() string {
 	return receiver.Type
 }
 
-func (receiver *Handler) parse(text string) types.ZfError {
-
+// parseAndStore parses text and stores the result in the handler's Value field
+// This centralizes the parsing logic and reduces duplication
+func (receiver *Handler) parseAndStore(text string) types.ZfError {
 	result, zfError := receiver.Unmarshaler.Unmarshal([]byte(text))
 	if zfError != nil {
 		return zfError
 	}
+	
 	switch result.(type) {
 	case map[interface{}]interface{}:
 		receiver.Value = util.ConvertMap2String(result.(map[interface{}]interface{}))
@@ -54,8 +56,13 @@ func (receiver *Handler) parse(text string) types.ZfError {
 	return nil
 }
 
+// Legacy parse method for backward compatibility
+func (receiver *Handler) parse(text string) types.ZfError {
+	return receiver.parseAndStore(text)
+}
+
 func (receiver *Handler) Parse(text string) (string, types.ZfError) {
-	err := receiver.parse(text)
+	err := receiver.parseAndStore(text)
 	if err != nil {
 		return "", err
 	}
@@ -66,50 +73,68 @@ func (receiver *Handler) PrintToString() (string, types.ZfError) {
 	if receiver.Value == nil {
 		return "", types.NewUnSupportError("未初始化，无法输出内容")
 	}
+	
+	var content interface{}
 	if len(receiver.Value) == 1 && receiver.Value[""] != nil {
-		// 这种情况不是object，直接打印
-		bytes, err := receiver.Marshaler.Marshal(receiver.Value[""])
-		if err != nil {
-			return "", err
-		}
-		return string(bytes), nil
+		// Single value, not an object
+		content = receiver.Value[""]
 	} else {
-		//bytes, err := receiver.Marshaler.Marshal(util.ConvertMap2String(receiver.Value))
-		bytes, err := receiver.Marshaler.Marshal(receiver.Value)
-		if err != nil {
-			return "", err
-		}
-		return string(bytes), nil
+		// Object or multiple values
+		content = receiver.Value
 	}
+	
+	bytes, err := receiver.Marshaler.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
 }
 
 func (receiver *Handler) Marshal(content interface{}) (string, types.ZfError) {
-	if content != nil {
-		res, err := receiver.Marshaler.Marshal(content)
-		if err != nil {
-			return "", err
-		}
-		return string(res), nil
+	if content == nil {
+		return "", nil
 	}
-	return "", nil
+	res, err := receiver.Marshaler.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	return string(res), nil
+}
+
+// validatePathAndParse centralizes path validation and text parsing
+func (receiver *Handler) validatePathAndParse(path, text string) ([]*types.Path, types.ZfError) {
+	err := receiver.parseAndStore(text)
+	if err != nil {
+		return nil, err
+	}
+	
+	paths, err := util.ParsePath(path)
+	if err != nil {
+		return nil, err
+	}
+	
+	if len(paths) < 1 || paths[0].Type != types.RootNode {
+		return nil, types.NewFormatError(path, "path")
+	}
+	
+	return paths, nil
 }
 
 func (receiver *Handler) Keys(from uint, to uint, path string, text string) ([]string, types.ZfError) {
-
 	value, err := receiver.getValues(path, text)
 	if err != nil {
 		return nil, err
 	}
+	
 	valueType, _ := types.GetType(value)
 	if valueType != types.Object {
 		return nil, types.NewUnSupportError("只有object支持此操作,当前类型:" + string(valueType))
 	}
+	
 	v := value.(map[string]interface{})
-	i := 0
-	keys := make([]string, len(v))
+	keys := make([]string, 0, len(v))
 	for k := range v {
-		keys[i] = k
-		i++
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
@@ -128,19 +153,32 @@ func (receiver *Handler) GetType(path string, text string) (types.ValueType, typ
 }
 
 func (receiver *Handler) getValues(path string, text string) (interface{}, types.ZfError) {
-	err := receiver.parse(text)
+	paths, err := receiver.validatePathAndParse(path, text)
 	if err != nil {
 		return nil, err
 	}
-	paths, err := util.ParsePath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	if paths[0].Type != types.RootNode {
-		return nil, types.NewFormatError(path, "path")
-	}
+	
 	return getValues(paths[1:], receiver.Value)
+}
+
+// processArrayValue handles different array type conversions consistently
+func processArrayValue(result interface{}, from, to uint) (interface{}, types.ZfError) {
+	switch arr := result.(type) {
+	case []interface{}:
+		start := util.Max(0, int(from))
+		end := util.Min(int(to), len(arr))
+		return arr[start:end], nil
+	case []map[string]interface{}:
+		start := util.Max(0, int(from))
+		end := util.Min(int(to), len(arr))
+		return arr[start:end], nil
+	case []map[interface{}]interface{}:
+		start := util.Max(0, int(from))
+		end := util.Min(int(to), len(arr))
+		return arr[start:end], nil
+	default:
+		return result, nil
+	}
 }
 
 // 根据path解析值
@@ -188,7 +226,7 @@ func getValues(paths []*types.Path, v interface{}) (result interface{}, e types.
 			case types.IndexNode:
 				array := result.([]interface{})
 				if int(p.Index) >= len(array) {
-					return nil, types.NewIndexOutOfBoundError(array, "array", int(p.Index))
+					return nil, types.NewIndexOutOfBoundErrorFromSlice(array, "array", int(p.Index))
 				}
 				result = array[int(p.Index)]
 			case types.RangeNode:
@@ -197,7 +235,7 @@ func getValues(paths []*types.Path, v interface{}) (result interface{}, e types.
 					p.To = uint(len(array))
 				}
 				if int(p.To) > len(array) {
-					return nil, types.NewIndexOutOfBoundError(array, p.OriginValue, int(p.To))
+					return nil, types.NewIndexOutOfBoundErrorFromSlice(array, p.OriginValue, int(p.To))
 				}
 				for i := p.From; i < p.To; i++ {
 
@@ -212,7 +250,6 @@ func getValues(paths []*types.Path, v interface{}) (result interface{}, e types.
 }
 
 func (receiver *Handler) GetValues(from uint, to uint, path string, text string) (interface{}, types.ZfError) {
-
 	res, err := receiver.getValues(path, text)
 	if err != nil {
 		return nil, err
@@ -222,50 +259,33 @@ func (receiver *Handler) GetValues(from uint, to uint, path string, text string)
 	if err != nil {
 		return nil, err
 	}
+	
 	if valueType == types.Array {
-		switch res.(type) {
-		case []interface{}:
-			result := res.([]interface{})
-			start := util.Max(0, int(from))
-			end := util.Min(int(to), len(result))
-			return result[start:end], nil
-		case []map[string]interface{}:
-			result := res.([]map[string]interface{})
-			start := util.Max(0, int(from))
-			end := util.Min(int(to), len(result))
-			return result[start:end], nil
-		case []map[interface{}]interface{}:
-			result := res.([]map[interface{}]interface{})
-			start := util.Max(0, int(from))
-			end := util.Min(int(to), len(result))
-			return result[start:end], nil
-		}
+		return processArrayValue(res, from, to)
 	}
 
 	return res, nil
 }
 
+// parseValueWithUnmarshaler centralizes value parsing logic
+func (receiver *Handler) parseValueWithUnmarshaler(value string) (interface{}, types.ZfError) {
+	return receiver.Unmarshaler.Unmarshal([]byte(value))
+}
+
 func (receiver *Handler) Append(path string, key string, index uint, value string, text string) (string, types.ZfError) {
-	err := receiver.parse(text)
+	paths, err := receiver.validatePathAndParse(path, text)
 	if err != nil {
 		return "", err
 	}
-	paths, err := util.ParsePath(path)
-	if err != nil {
-		return "", err
-	}
+	
 	if len(paths) <= 1 {
 		return "", types.NewUnSupportError("路径最少要有两层，如 .a")
-	}
-
-	if paths[0].Type != types.RootNode {
-		return "", types.NewFormatError(path, "path")
 	}
 
 	// 根据路径获取其父节点值
 	parentValue, e := getValues(paths[1:len(paths)-1], receiver.Value)
 	if e != nil {
-		return "", nil
+		return "", e
 	}
 
 	parentMap := parentValue.(map[string]interface{})
@@ -274,7 +294,7 @@ func (receiver *Handler) Append(path string, key string, index uint, value strin
 	lastPathV := parentMap[lastPath.NodeKey]
 	lastPathVType, _ := types.GetType(lastPathV)
 
-	v, err := receiver.Unmarshaler.Unmarshal([]byte(value))
+	v, err := receiver.parseValueWithUnmarshaler(value)
 	if err != nil {
 		return "", err
 	}
@@ -342,21 +362,13 @@ func (receiver *Handler) Append(path string, key string, index uint, value strin
 }
 
 func (receiver *Handler) SetValue(path string, value string, text string) (string, types.ZfError) {
-
-	err := receiver.parse(text)
+	paths, err := receiver.validatePathAndParse(path, text)
 	if err != nil {
 		return "", err
 	}
-	paths, err := util.ParsePath(path)
-	if err != nil {
-		return "", err
-	}
+	
 	if len(paths) < 1 {
 		return "", types.NewUnSupportError("路径最少要有两层，如 .a")
-	}
-
-	if paths[0].Type != types.RootNode {
-		return "", types.NewFormatError(path, "path")
 	}
 
 	// 根据路径获取其父节点值
@@ -364,7 +376,8 @@ func (receiver *Handler) SetValue(path string, value string, text string) (strin
 	if e != nil {
 		return "", e
 	}
-	v, err := receiver.Unmarshaler.Unmarshal([]byte(value))
+	
+	v, err := receiver.parseValueWithUnmarshaler(value)
 	if err != nil {
 		return "", err
 	}
@@ -433,7 +446,7 @@ func (receiver *Handler) setValue1(lastV interface{}, v interface{}, from uint, 
 	case []map[string]interface{}:
 		array := lastV.([]map[string]interface{})
 		if int(from) > len(array)-1 {
-			return types.NewIndexOutOfBoundError3(array, "array", int(from))
+			return types.NewIndexOutOfBoundErrorFromMapSlice(array, "array", int(from))
 		}
 		switch v.(type) {
 		case map[string]interface{}:

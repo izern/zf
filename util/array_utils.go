@@ -13,17 +13,17 @@ func ArrayCopy(src []interface{}, srcPos int, dest []interface{}, destPos int, l
 	srcLength := len(src)
 	destLength := len(dest)
 	if srcPos > srcLength {
-		return types.NewIndexOutOfBoundError(src, "src", srcPos)
+		return types.NewIndexOutOfBoundErrorFromSlice(src, "src", srcPos)
 	}
 	if srcPos+length > srcLength {
-		return types.NewIndexOutOfBoundError(src, "src", srcPos+length)
+		return types.NewIndexOutOfBoundErrorFromSlice(src, "src", srcPos+length)
 	}
 
 	if destPos > destLength {
-		return types.NewIndexOutOfBoundError(src, "dest", srcPos)
+		return types.NewIndexOutOfBoundError(destLength, "dest", destPos)
 	}
 	if destPos+length > destLength {
-		return types.NewIndexOutOfBoundError(src, "dest", srcPos+length)
+		return types.NewIndexOutOfBoundError(destLength, "dest", destPos+length)
 	}
 
 	j := destPos
