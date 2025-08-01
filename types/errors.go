@@ -56,15 +56,18 @@ func (err *UnSupportError) Error() error {
 	return errors.New(fmt.Sprintf("不支持的操作：%s", err.Type))
 }
 
-func NewIndexOutOfBoundError(array []interface{}, arrayName string, index int) *IndexOutOfBoundError {
-	return &IndexOutOfBoundError{index: index, size: len(array), arrayName: arrayName}
-}
-func NewIndexOutOfBoundError2(array []map[string]interface{}, arrayName string, index int) *IndexOutOfBoundError {
-	return &IndexOutOfBoundError{index: index, size: len(array), arrayName: arrayName}
+// Consolidated IndexOutOfBoundError constructor
+func NewIndexOutOfBoundError(size int, arrayName string, index int) *IndexOutOfBoundError {
+	return &IndexOutOfBoundError{index: index, size: size, arrayName: arrayName}
 }
 
-func NewIndexOutOfBoundError3(array []map[string]interface{}, arrayName string, index int) *IndexOutOfBoundError {
-	return &IndexOutOfBoundError{index: index, size: len(array), arrayName: arrayName}
+// Convenience constructors for different array types
+func NewIndexOutOfBoundErrorFromSlice(array []interface{}, arrayName string, index int) *IndexOutOfBoundError {
+	return NewIndexOutOfBoundError(len(array), arrayName, index)
+}
+
+func NewIndexOutOfBoundErrorFromMapSlice(array []map[string]interface{}, arrayName string, index int) *IndexOutOfBoundError {
+	return NewIndexOutOfBoundError(len(array), arrayName, index)
 }
 
 func (err *IndexOutOfBoundError) Error() error {

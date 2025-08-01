@@ -8,28 +8,28 @@ import (
 	"github.com/izern/zf/util"
 	"github.com/spf13/cobra"
 	"math"
+	"os"
+	"runtime"
+	"strconv"
 )
 
 var pretty bool
 
 func init() {
+	// Optimize for performance
+	runtime.GOMAXPROCS(runtime.NumCPU())
 }
 
 func main() {
-
 	rootCmd := &cobra.Command{
 		Use:     "zf",
 		Short:   "zf用来解析格式化字符串文本",
 		Example: "cat file.yml | zf yaml ",
+		Version: "v0.9.1", // Updated version
 	}
 
-	rootCmd.AddCommand(&cobra.Command{
-		Use:   "version",
-		Short: "版本号",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("zf version: v0.9")
-		},
-	})
+	// Remove the separate version command since cobra handles it automatically
+	rootCmd.SetVersionTemplate("zf version: {{.Version}}\n")
 
 	typeCmds := cmd.GetAllCmd()
 	for _, typeCmd := range typeCmds {
@@ -42,6 +42,13 @@ func main() {
 				if e != nil {
 					return e
 				}
+				
+				// Check if we should use performance optimizations
+				if len(args) > 0 && util.ShouldUseStreaming([]byte(args[0])) {
+					// For large files, suggest using specific subcommands
+					fmt.Fprintf(os.Stderr, "Warning: Large input detected. Consider using specific subcommands for better performance.\n")
+				}
+				
 				text, err := typeCmd.Parse(args[0])
 				if err != nil {
 					return err.Error()
@@ -58,13 +65,19 @@ func main() {
 	convertCmd := &cobra.Command{
 		Use:     "convert",
 		Short:   "文本内容格式转换",
-		Example: "cat test.yml | zf --from yaml --to json",
+		Example: "cat test.yml | zf convert --from yaml --to json",
 		Args:    util.ExactArgsWithPipe(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			args, err := util.InitArgsFromPipe(args)
 			if err != nil {
 				return err
 			}
+			
+			// Validate required flags
+			if from == "" || to == "" {
+				return fmt.Errorf("both --from and --to flags are required")
+			}
+			
 			fromCmd, err := cmd.GetCmd(from)
 			if err != nil {
 				return err
@@ -74,37 +87,113 @@ func main() {
 				return err
 			}
 
-			res, e := fromCmd.GetValues(0, math.MaxUint32, ".", args[0])
-			if e != nil {
-				return e.Error()
-			}
+			// Check for large file optimization
+			inputData := []byte(args[0])
+			if util.ShouldUseStreaming(inputData) {
+				// Use memory-aware processing for large files
+				processor := util.NewCacheAwareProcessor(100 * 1024 * 1024) // 100MB threshold
+				result, convErr := processor.ProcessWithAdaptiveStrategy(inputData, func(data []byte, highMemory bool) ([]byte, error) {
+					res, e := fromCmd.GetValues(0, math.MaxUint32, ".", string(data))
+					if e != nil {
+						return nil, e.Error()
+					}
 
-			switch res.(type) {
-			case map[string]interface{}:
-				res = res.(map[string]interface{})
-			case map[interface{}]interface{}:
-				res = util.ConvertMap2String(res.(map[interface{}]interface{}))
-			case []interface{}:
-				res = util.ConvertArray2String(res.([]interface{}))
+					// Optimize type conversion based on memory mode
+					switch res.(type) {
+					case map[string]interface{}:
+						// Already optimized
+					case map[interface{}]interface{}:
+						if highMemory {
+							res = util.ConvertMap2String(res.(map[interface{}]interface{}))
+						} else {
+							res = util.OptimizedConvertMap2String(res.(map[interface{}]interface{}))
+						}
+					case []interface{}:
+						res = util.ConvertArray2String(res.([]interface{}))
+					}
+					
+					text, e := toCmd.Marshal(res)
+					if e != nil {
+						return nil, e.Error()
+					}
+					return []byte(text), nil
+				})
+				
+				if convErr != nil {
+					return convErr
+				}
+				fmt.Print(string(result))
+			} else {
+				// Use standard processing for smaller files
+				res, e := fromCmd.GetValues(0, math.MaxUint32, ".", args[0])
+				if e != nil {
+					return e.Error()
+				}
+
+				switch res.(type) {
+				case map[string]interface{}:
+					res = res.(map[string]interface{})
+				case map[interface{}]interface{}:
+					res = util.ConvertMap2String(res.(map[interface{}]interface{}))
+				case []interface{}:
+					res = util.ConvertArray2String(res.([]interface{}))
+				}
+				text, e := toCmd.Marshal(res)
+				if e != nil {
+					return e.Error()
+				}
+				fmt.Println(text)
 			}
-			text, e := toCmd.Marshal(res)
-			if e != nil {
-				return e.Error()
-			}
-			fmt.Println(text)
+			
 			return nil
 		},
 	}
-	convertCmd.Flags().StringVarP(&from, "from", "f", "", "源数据格式")
-	convertCmd.Flags().StringVarP(&to, "to", "t", "", "目标数据格式")
+	convertCmd.Flags().StringVarP(&from, "from", "f", "", "源数据格式 (json|yaml|toml)")
+	convertCmd.Flags().StringVarP(&to, "to", "t", "", "目标数据格式 (json|yaml|toml)")
+	convertCmd.MarkFlagRequired("from")
+	convertCmd.MarkFlagRequired("to")
 
 	rootCmd.AddCommand(convertCmd)
 
+	// Add performance tuning command
+	perfCmd := &cobra.Command{
+		Use:   "perf",
+		Short: "性能调优选项",
+		Hidden: true, // Hidden command for advanced users
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				fmt.Println("当前性能设置:")
+				fmt.Printf("  GOMAXPROCS: %d\n", runtime.GOMAXPROCS(0))
+				fmt.Printf("  NumCPU: %d\n", runtime.NumCPU())
+				return nil
+			}
+			
+			if args[0] == "gc" {
+				util.ForceGC()
+				fmt.Println("强制垃圾回收完成")
+				return nil
+			}
+			
+			if len(args) >= 2 && args[0] == "maxprocs" {
+				n, err := strconv.Atoi(args[1])
+				if err != nil {
+					return fmt.Errorf("invalid number: %s", args[1])
+				}
+				runtime.GOMAXPROCS(n)
+				fmt.Printf("GOMAXPROCS设置为: %d\n", n)
+				return nil
+			}
+			
+			return fmt.Errorf("unknown performance command: %s", args[0])
+		},
+	}
+	rootCmd.AddCommand(perfCmd)
+
 	err := rootCmd.Execute()
 	if err != nil {
-		fmt.Println(err.Error())
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
-
 }
 
 func appendChildCmd(cmd *cobra.Command, typeCmd types.TypeCommand) {
@@ -208,10 +297,10 @@ func appendGetValueCmd(cmd *cobra.Command, typeCmd types.TypeCommand) {
 				return err.Error()
 			}
 			marshal, zfError := typeCmd.Marshal(res)
-			fmt.Println(marshal)
 			if zfError != nil {
-				zfError.Error()
+				return zfError.Error()
 			}
+			fmt.Println(marshal)
 			return nil
 		},
 	}
@@ -244,8 +333,9 @@ func appendAppendCmd(cmd *cobra.Command, typeCmd types.TypeCommand) {
 	}
 	c.Flags().StringVarP(&path, "path", "p", ".", "节点路径，jsonpath格式")
 	c.Flags().UintVarP(&index, "index", "i", math.MaxInt16, "array或string时可以指定，默认插在最后面")
-	c.Flags().StringVarP(&key, "key", "k", ".", "当类型为object时需指定key")
+	c.Flags().StringVarP(&key, "key", "k", "", "当类型为object时需指定key")
 	c.Flags().StringVarP(&value, "value", "v", "", "append的值")
+	c.MarkFlagRequired("value")
 	cmd.AddCommand(c)
 }
 
@@ -271,6 +361,7 @@ func appendSetValueCmd(cmd *cobra.Command, typeCmd types.TypeCommand) {
 	}
 	c.Flags().StringVarP(&path, "path", "p", ".", "节点路径，jsonpath格式")
 	c.Flags().StringVarP(&value, "value", "v", "", "set的值")
+	c.MarkFlagRequired("value")
 
 	cmd.AddCommand(c)
 }
