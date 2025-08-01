@@ -3,7 +3,6 @@ package util
 import (
 	"fmt"
 	"runtime"
-	"github.com/izern/zf/types"
 )
 
 // MemoryPool provides object pooling to reduce allocations
@@ -100,15 +99,32 @@ func OptimizedConvertMap2String(m map[interface{}]interface{}) map[string]interf
 	}
 
 	res := GetPooledStringMap()
-	if cap(res) < len(m) {
-		// If pooled map is too small, create a new one
+	if len(res) == 0 && len(m) > 16 {
+		// If pooled map is empty and we need a larger map, create a new one
 		ReturnPooledStringMap(res)
 		res = make(map[string]interface{}, len(m))
 	}
 
 	for k, v := range m {
 		key := fmt.Sprint(k)
-		res[key] = convertValue(v)
+		switch val := v.(type) {
+		case map[interface{}]interface{}:
+			res[key] = ConvertMap2String(val)
+		case map[string]interface{}:
+			res[key] = val // Already correct type
+		case []interface{}:
+			res[key] = ConvertArray2String(val)
+		case []map[interface{}]interface{}:
+			result := make([]map[string]interface{}, len(val))
+			for i, item := range val {
+				result[i] = ConvertMap2String(item)
+			}
+			res[key] = result
+		case []map[string]interface{}:
+			res[key] = val // Already correct type
+		default:
+			res[key] = v // Primitive types don't need conversion
+		}
 	}
 	return res
 }

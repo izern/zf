@@ -41,6 +41,11 @@ func validatePath(path string) types.ZfError {
 		return types.NewFormatError(path, "path: empty path not allowed")
 	}
 	
+	// Special case: "." is a valid root path
+	if path == "." {
+		return nil
+	}
+	
 	// Check for invalid endings (except escaped dots)
 	if strings.HasSuffix(path, ".") && !strings.HasSuffix(path, "\\.") {
 		return types.NewFormatError(path, "path: cannot end with '.'")

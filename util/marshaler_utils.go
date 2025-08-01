@@ -2,7 +2,6 @@ package util
 
 import (
 	"fmt"
-	"github.com/izern/zf/types"
 )
 
 func init() {

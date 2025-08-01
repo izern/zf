@@ -210,17 +210,20 @@ func getValues(paths []*types.Path, v interface{}) (result interface{}, e types.
 			case types.NormalNode:
 				// 处理[].name情况，取出来数组，
 				if i > 0 && (paths[i-1].Type == types.IndexNode || paths[i-1].Type == types.RangeNode) {
-					array := result.([]interface{})
-					tmpResult := make([]interface{}, 0)
-					for _, item := range array {
-						itemType, _ := types.GetType(item)
-						if itemType == types.Object {
-							tmpResult = append(tmpResult, item.(map[string]interface{})[p.NodeKey])
-						} else {
-							return nil, types.NewUnSupportError(fmt.Sprintf("当前节点下数组下元素类型是%s,不支持%s", itemType, p.OriginValue))
+					// 检查result是否真的是数组类型
+					if valueType == types.Array {
+						array := result.([]interface{})
+						tmpResult := make([]interface{}, 0)
+						for _, item := range array {
+							itemType, _ := types.GetType(item)
+							if itemType == types.Object {
+								tmpResult = append(tmpResult, item.(map[string]interface{})[p.NodeKey])
+							} else {
+								return nil, types.NewUnSupportError(fmt.Sprintf("当前节点下数组下元素类型是%s,不支持%s", itemType, p.OriginValue))
+							}
 						}
+						result = tmpResult
 					}
-					result = tmpResult
 				}
 				// 如果是object类型,已经前置处理过了
 			case types.IndexNode:
